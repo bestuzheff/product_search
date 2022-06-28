@@ -5,6 +5,7 @@ import sqlite3
 from requests import Session
 from requests.auth import HTTPBasicAuth
 from zeep.transports import Transport
+from rapidfuzz import fuzz
 import json
 
 # База данных
@@ -41,20 +42,24 @@ def get_data_from_1c():
     return client.service.GetSearchData()
 
 
+def get_partial_ratio(original_string, search_string):
+    return fuzz.partial_ratio(original_string.upper(), search_string.upper())
+
+
 @dp.message_handler(commands=['update'])
 async def send_welcome(message: types.Message):
     # Получим данные из 1С
-    dataFrom1C = json.loads(get_data_from_1c())
+    data_from_1c = json.loads(get_data_from_1c())
     # Удалим текущие записи в таблице
     sql.execute("DELETE FROM goods")
     # Запишем новые данные в ьаблицу
-    for elDataFrom1C in dataFrom1C:
+    for element_from_1c in data_from_1c:
         sql.execute(f"INSERT INTO goods VALUES (?, ?, ?, ?)",
                     (
-                        elDataFrom1C['code'],
-                        elDataFrom1C['name'],
-                        elDataFrom1C['botname'],
-                        elDataFrom1C['suppliername']
+                        element_from_1c['code'],
+                        element_from_1c['name'],
+                        element_from_1c['botname'],
+                        element_from_1c['suppliername']
                     ))
     # Примменим изменения
     db.commit()
@@ -64,10 +69,56 @@ async def send_welcome(message: types.Message):
 
 @dp.message_handler()
 async def echo(message: types.Message):
-    # old style:
-    # await bot.send_message(message.chat.id, message.text)
 
-    await message.answer(message.text)
+    search_string = message.text
+    # Создать структуру для поиска
+    search_list = []
+
+    # Получить данные из БД
+    goods_data = sql.execute("SELECT * FROM goods")
+
+    # Пройтись по всем данным и заполнить структуру поиска
+    for value in goods_data:
+        code = value[0]
+        max_search_value = 0
+        # Наименование
+        name = value[1]
+        if name != "":
+            search_value = get_partial_ratio(name, search_string)
+            if search_value > max_search_value:
+                max_search_value = search_value
+
+        # botname
+        botname = value[2]
+        if botname != "":
+            search_value = get_partial_ratio(botname, search_string)
+            if search_value > max_search_value:
+                max_search_value = search_value
+
+        # suppliername
+        suppliername = value[3]
+        if suppliername != "":
+            search_value = get_partial_ratio(suppliername, search_string)
+            if search_value > max_search_value:
+                max_search_value = search_value
+
+        search_list.append({'code': code, 'name': name, 'search_value': max_search_value})
+
+    # Отсортировать данные
+    search_list = sorted(search_list, key=lambda search_value: search_value['search_value'], reverse=True)
+
+    message_text = ""
+    i = 0
+    for search_item in search_list:
+        message_text += search_item["name"] + "\n"
+        i += 1
+        if i >= 10:
+            break
+
+
+    # Вывести 10 самых подходящих
+
+    await message.answer(message_text)
 
 
 if __name__ == '__main__':
